@@ -72,7 +72,7 @@ if (pages == "") {
   var tasks = dv.pages().file.tasks;
 } else if (typeof pages === "string" && pages.startsWith("dv.pages")) {
   var tasks = eval(pages);
-} else if (typeof pages && pages.every((p) => p.task)) {
+} else if (Array.isArray(pages) && pages.every((p) => p.task)) {
   var tasks = pages;
 } else {
   var tasks = dv.pages(pages).file.tasks;
@@ -166,10 +166,15 @@ var taskIndex = {
   byStartDate: new Map(),
   byScheduledDate: new Map(),
   byDailyNote: new Map(),
+  byCancelledDate: new Map(),
   allIncomplete: [],  // for overdue calculations
   incompleteWithStart: [],  // for process calculations (smaller subset)
   overdueToday: [],   // pre-computed overdue tasks (only shown on today)
 };
+
+// Process tasks depend on the currently rendered date range. Build this map
+// once per view instead of scanning every task once per calendar cell.
+var processIndex = new Map();
 
 // Note metadata cache (avoids repeated dv.pages calls)
 var noteMetaCache = new Map();
@@ -261,50 +266,99 @@ function buildTaskIndex(tasks) {
 
   for (var i = 0; i < tasks.length; i++) {
     var task = tasks[i];
+    task._calendarStatus = getTaskStatus(task);
+    task._completionDate = normalizeDate(task.completion);
+    task._dueDate = normalizeDate(task.due);
+    task._startDate = normalizeDate(task.start);
+    task._scheduledDate = normalizeDate(task.scheduled);
+    task._dailyNoteDate = normalizeDate(task.dailyNote);
     
     // Index completed tasks by completion date
-    if (task.completion) {
-      var completionDate = moment(task.completion.toString()).format("YYYY-MM-DD");
-      addToDateMap(taskIndex.byCompletionDate, completionDate, task);
+    if (task._completionDate) {
+      addToDateMap(taskIndex.byCompletionDate, task._completionDate, task);
     }
     
     // Index tasks with due dates
-    if (task.due) {
-      var dueDate = moment(task.due.toString()).format("YYYY-MM-DD");
-      addToDateMap(taskIndex.byDueDate, dueDate, task);
+    if (task._dueDate) {
+      addToDateMap(taskIndex.byDueDate, task._dueDate, task);
     }
     
     // Index tasks with start dates
-    if (task.start) {
-      var startDate = moment(task.start.toString()).format("YYYY-MM-DD");
-      addToDateMap(taskIndex.byStartDate, startDate, task);
+    if (task._startDate) {
+      addToDateMap(taskIndex.byStartDate, task._startDate, task);
     }
     
     // Index tasks with scheduled dates
-    if (task.scheduled) {
-      var scheduledDate = moment(task.scheduled.toString()).format("YYYY-MM-DD");
-      addToDateMap(taskIndex.byScheduledDate, scheduledDate, task);
+    if (task._scheduledDate) {
+      addToDateMap(taskIndex.byScheduledDate, task._scheduledDate, task);
     }
     
     // Index tasks by daily note date
-    if (task.dailyNote) {
-      var dailyNoteDate = moment(task.dailyNote.toString()).format("YYYY-MM-DD");
-      addToDateMap(taskIndex.byDailyNote, dailyNoteDate, task);
+    if (task._dailyNoteDate) {
+      addToDateMap(taskIndex.byDailyNote, task._dailyNoteDate, task);
+    }
+
+    if (task._calendarStatus === "cancelled") {
+      var cancelledDates = new Set([
+        task._dueDate,
+        task._startDate,
+        task._scheduledDate,
+        task._dailyNoteDate,
+      ]);
+      cancelledDates.delete("");
+      cancelledDates.forEach((date) =>
+        addToDateMap(taskIndex.byCancelledDate, date, task),
+      );
     }
     
     // Track incomplete tasks with due dates (for overdue calculations)
-    if (!task.completed && !task.checked && task.due) {
+    if (task._calendarStatus === "active" && task._dueDate) {
       taskIndex.allIncomplete.push(task);
       
       // Pre-compute overdue tasks (due before today)
-      if (moment(task.due.toString()).isBefore(tToday)) {
+      if (task._dueDate < tToday) {
         taskIndex.overdueToday.push(task);
       }
       
       // Track tasks with start dates for process calculations (smaller subset)
-      if (task.start) {
+      if (task._startDate) {
         taskIndex.incompleteWithStart.push(task);
       }
+    }
+  }
+}
+
+function getTaskStatus(task) {
+  var status = String(task.status || "");
+  if (task.completed || status === "x" || status === "X") return "done";
+  if (status === "-" || status === "~") return "cancelled";
+  return "active";
+}
+
+function normalizeDate(value) {
+  if (!value) return "";
+  if (typeof value.toISODate === "function") return value.toISODate();
+  var match = String(value).match(/\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : "";
+}
+
+function addIsoDays(date, days) {
+  var parts = date.split("-").map(Number);
+  var value = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + days));
+  return value.toISOString().slice(0, 10);
+}
+
+function prepareProcessIndex(rangeStart, rangeEnd) {
+  processIndex = new Map();
+  for (var i = 0; i < taskIndex.incompleteWithStart.length; i++) {
+    var task = taskIndex.incompleteWithStart[i];
+    var first = addIsoDays(task._startDate, 1);
+    var last = addIsoDays(task._dueDate, -1);
+    if (first < rangeStart) first = rangeStart;
+    if (last > rangeEnd) last = rangeEnd;
+    for (var date = first; date <= last; date = addIsoDays(date, 1)) {
+      if (!processIndex.has(date)) processIndex.set(date, []);
+      processIndex.get(date).push(task);
     }
   }
 }
@@ -325,11 +379,11 @@ function getMetaFromNote(task, metaName) {
   
   if (!noteMetaCache.has(notePath)) {
     // Only fetch metadata when actually needed (lazy loading)
-    var notePages = dv.pages('"' + notePath + '"');
+    var notePage = dv.page(notePath);
     noteMetaCache.set(notePath, {
-      color: notePages?.color?.[0] || "",
-      textColor: notePages?.textColor?.[0] || "",
-      icon: notePages?.icon?.[0] || "",
+      color: notePage?.color || "",
+      textColor: notePage?.textColor || "",
+      icon: notePage?.icon || "",
     });
   }
   return noteMetaCache.get(notePath)[metaName] || "";
@@ -385,60 +439,54 @@ function momentToRegex(momentFormat) {
 }
 
 function getTasks(date) {
-  var dateStr = moment(date).format("YYYY-MM-DD");
+  var dateStr = normalizeDate(date) || moment(date).format("YYYY-MM-DD");
   
   // Get tasks from completion date index
   var completionTasks = taskIndex.byCompletionDate.get(dateStr) || [];
-  done = completionTasks.filter((t) => t.completed && t.checked);
+  done = completionTasks.filter((t) => t._calendarStatus === "done");
   
   // Get done tasks without completion date (by due date)
   var dueDateTasks = taskIndex.byDueDate.get(dateStr) || [];
   doneWithoutCompletionDate = dueDateTasks.filter(
-    (t) => t.completed && t.checked && !t.completion
+    (t) => t._calendarStatus === "done" && !t._completionDate,
   );
   done = done.concat(doneWithoutCompletionDate);
   
   // Get due tasks (not completed, not recurring)
   due = dueDateTasks.filter(
-    (t) => !t.completed && !t.checked && !t.recurrence
+    (t) => t._calendarStatus === "active" && !t.recurrence,
   );
   
   // Get recurring tasks
   recurrence = dueDateTasks.filter(
-    (t) => !t.completed && !t.checked && t.recurrence
+    (t) => t._calendarStatus === "active" && t.recurrence,
   );
   
   // Get overdue tasks - use pre-computed list for today, otherwise compute
   if (dateStr === tToday) {
     overdue = taskIndex.overdueToday;
   } else {
-    overdue = taskIndex.allIncomplete.filter(
-      (t) => moment(t.due.toString()).isBefore(dateStr)
-    );
+    overdue = [];
   }
   
   // Get start tasks from index
   var startDateTasks = taskIndex.byStartDate.get(dateStr) || [];
-  start = startDateTasks.filter((t) => !t.completed && !t.checked);
+  start = startDateTasks.filter((t) => t._calendarStatus === "active");
   
   // Get scheduled tasks from index
   var scheduledDateTasks = taskIndex.byScheduledDate.get(dateStr) || [];
-  scheduled = scheduledDateTasks.filter((t) => !t.completed && !t.checked);
+  scheduled = scheduledDateTasks.filter((t) => t._calendarStatus === "active");
   
   // Get process tasks (start before date, due after date)
   // Uses pre-filtered list of tasks with start dates (smaller subset)
-  process = taskIndex.incompleteWithStart.filter(
-    (t) =>
-      moment(t.due.toString()).isAfter(dateStr) &&
-      moment(t.start.toString()).isBefore(dateStr)
-  );
+  process = processIndex.get(dateStr) || [];
   
   // Get cancelled tasks
-  cancelled = dueDateTasks.filter((t) => !t.completed && t.checked);
+  cancelled = taskIndex.byCancelledDate.get(dateStr) || [];
   
   // Get daily note tasks from index
   var dailyNoteTasks = taskIndex.byDailyNote.get(dateStr) || [];
-  dailyNote = dailyNoteTasks.filter((t) => !t.completed && !t.checked);
+  dailyNote = dailyNoteTasks.filter((t) => t._calendarStatus === "active");
 }
 
 function setTask(obj, cls, types) {
@@ -983,6 +1031,10 @@ function getMonth(tasks, month) {
   // Set Wrappers
   var wrappers = "";
   var starts = 0 - firstDayOfMonth + parseInt(firstDayOfWeek);
+  prepareProcessIndex(
+    moment(month).add(starts, "days").format("YYYY-MM-DD"),
+    moment(month).add(starts + 41, "days").format("YYYY-MM-DD"),
+  );
   for (w = 1; w < 7; w++) {
     var wrapper = "";
     var weekNr = "";
@@ -1123,9 +1175,15 @@ function getWeek(tasks, week) {
   var recurrenceCounter = 0;
   var dailyNoteCounter = 0;
 
+  var weekStartOffset = 0 - currentWeekday + parseInt(firstDayOfWeek);
+  prepareProcessIndex(
+    moment(week).add(weekStartOffset, "days").format("YYYY-MM-DD"),
+    moment(week).add(weekStartOffset + 6, "days").format("YYYY-MM-DD"),
+  );
+
   for (
-    i = 0 - currentWeekday + parseInt(firstDayOfWeek);
-    i < 7 - currentWeekday + parseInt(firstDayOfWeek);
+    i = weekStartOffset;
+    i < weekStartOffset + 7;
     i++
   ) {
     var currentDate = moment(week).add(i, "days").format("YYYY-MM-DD");
@@ -1231,6 +1289,17 @@ function getList(tasks, month) {
   var recurrenceCounter = 0;
   var dailyNoteCounter = 0;
 
+  if (!upcomingDays) {
+    upcomingDays = "7";
+  }
+  var listRangeStart = moment(month).startOf("month").format("YYYY-MM-DD");
+  var listRangeEnd = moment(month).endOf("month").format("YYYY-MM-DD");
+  if (moment(month).format("YYYY-MM") === moment().format("YYYY-MM")) {
+    var upcomingRangeEnd = moment().add(parseInt(upcomingDays), "days").format("YYYY-MM-DD");
+    if (upcomingRangeEnd > listRangeEnd) listRangeEnd = upcomingRangeEnd;
+  }
+  prepareProcessIndex(listRangeStart, listRangeEnd);
+
   // Loop Days From Current Month
   for (i = 0; i < moment(month).endOf("month").format("D"); i++) {
     var currentDate = moment(month)
@@ -1267,9 +1336,6 @@ function getList(tasks, month) {
         "</details>";
 
       // Upcoming
-      if (!upcomingDays) {
-        upcomingDays = "7";
-      }
       var upcomingContent = "";
       for (t = 1; t < parseInt(upcomingDays) + 1; t++) {
         var next = moment(currentDate).add(t, "days").format("YYYY-MM-DD");
