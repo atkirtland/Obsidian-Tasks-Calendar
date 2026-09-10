@@ -158,6 +158,28 @@ var taskIcons = {
   start: "🛫",
   dailyNote: "📄",
 };
+var optionSet = new Set(String(options || "").split(/\s+/).filter(Boolean));
+var hiddenTaskTypes = {
+  scheduled: "noScheduled",
+  start: "noStart",
+  due: "noDue",
+  done: "noDone",
+  process: "noProcess",
+  recurrence: "noRecurrence",
+  overdue: "noOverdue",
+  dailyNote: "noDailyNote",
+};
+var typeRank = {
+  overdue: 0,
+  due: 1,
+  recurrence: 2,
+  start: 3,
+  scheduled: 4,
+  process: 5,
+  dailyNote: 6,
+  done: 7,
+  cancelled: 8,
+};
 
 // Task index for fast date lookups (built once during initialization)
 var taskIndex = {
@@ -272,6 +294,8 @@ function buildTaskIndex(tasks) {
     task._startDate = normalizeDate(task.start);
     task._scheduledDate = normalizeDate(task.scheduled);
     task._dailyNoteDate = normalizeDate(task.dailyNote);
+    task._sortPriority = String(task.priority || "C").toUpperCase();
+    task._sortText = String(task.text || "").toUpperCase();
     
     // Index completed tasks by completion date
     if (task._completionDate) {
@@ -493,13 +517,32 @@ function setTask(obj, cls, types) {
   // types is an optional array of all types this task belongs to
   types = types || [cls];
   
-  var lighter = 25;
-  var darker = -40;
-  var noteColor = getMetaFromNote(obj, "color");
-  var textColor = getMetaFromNote(obj, "textColor");
-  var noteIcon = getMetaFromNote(obj, "icon");
-  var taskText = obj.text.replace("'", "&apos;");
-  var taskPath = obj.link.path.replace("'", "&apos;");
+  if (!obj._renderData) {
+    var lighter = 25;
+    var darker = -40;
+    var noteColor = getMetaFromNote(obj, "color");
+    var textColor = getMetaFromNote(obj, "textColor");
+    var noteIcon = getMetaFromNote(obj, "icon");
+    var taskText = obj.text.replace("'", "&apos;");
+    var taskPath = obj.link.path.replace("'", "&apos;");
+    var noteFilename = getFilename(taskPath);
+    if (noteIcon) noteFilename = noteIcon + "&nbsp;" + noteFilename;
+    var taskSubpath = obj.header.subpath;
+    var taskLine = taskSubpath ? taskPath + "#" + taskSubpath : taskPath;
+    var relative = obj.due ? moment(obj.due).fromNow() : "";
+
+    if (noteColor && textColor) {
+      var style = "--task-background:" + noteColor + "33;--task-color:" + noteColor + ";--dark-task-text-color:" + textColor + ";--light-task-text-color:" + textColor;
+    } else if (noteColor) {
+      var style = "--task-background:" + noteColor + "33;--task-color:" + noteColor + ";--dark-task-text-color:" + transColor(noteColor, darker) + ";--light-task-text-color:" + transColor(noteColor, lighter);
+    } else if (textColor) {
+      var style = "--task-background:#7D7D7D33;--task-color:#7D7D7D;--dark-task-text-color:" + transColor(textColor, darker) + ";--light-task-text-color:" + transColor(textColor, lighter);
+    } else {
+      var style = "--task-background:#7D7D7D33;--task-color:#7D7D7D;--dark-task-text-color:#171717;--light-task-text-color:#bdbdbd";
+    }
+    obj._renderData = { taskText, taskLine, noteFilename, noteIcon, relative, style };
+  }
+  var renderData = obj._renderData;
   
   // Combine icons if task has multiple types
   var taskIcon;
@@ -509,90 +552,45 @@ function setTask(obj, cls, types) {
     taskIcon = taskIcons[cls] || "📅";
   }
   
-  if (obj.due) {
-    var relative = moment(obj.due).fromNow();
-  } else {
-    var relative = "";
-  }
-  var noteFilename = getFilename(taskPath);
-  if (noteIcon) {
-    noteFilename = noteIcon + "&nbsp;" + noteFilename;
-  } else {
+  var noteFilename = renderData.noteFilename;
+  if (!renderData.noteIcon) {
     noteFilename = taskIcon + "&nbsp;" + noteFilename;
     cls += " noNoteIcon";
   }
-  var taskSubpath = obj.header.subpath;
-  var taskLine = taskSubpath ? taskPath + "#" + taskSubpath : taskPath;
-  if (noteColor && textColor) {
-    var style =
-      "--task-background:" +
-      noteColor +
-      "33;--task-color:" +
-      noteColor +
-      ";--dark-task-text-color:" +
-      textColor +
-      ";--light-task-text-color:" +
-      textColor;
-  } else if (noteColor && !textColor) {
-    var style =
-      "--task-background:" +
-      noteColor +
-      "33;--task-color:" +
-      noteColor +
-      ";--dark-task-text-color:" +
-      transColor(noteColor, darker) +
-      ";--light-task-text-color:" +
-      transColor(noteColor, lighter);
-    var style =
-      "--task-background:" +
-      noteColor +
-      "33;--task-color:" +
-      noteColor +
-      ";--dark-task-text-color:" +
-      transColor(noteColor, darker) +
-      ";--light-task-text-color:" +
-      transColor(noteColor, lighter);
-  } else if (!noteColor && textColor) {
-    var style =
-      "--task-background:#7D7D7D33;--task-color:#7D7D7D;--dark-task-text-color:" +
-      transColor(textColor, darker) +
-      ";--light-task-text-color:" +
-      transColor(textColor, lighter);
-  } else {
-    var style =
-      "--task-background:#7D7D7D33;--task-color:#7D7D7D;--dark-task-text-color:" +
-      transColor("#7D7D7D", darker) +
-      ";--light-task-text-color:" +
-      transColor("#7D7D7D", lighter);
-  }
   var newTask = taskTemplate
-    .replace("{{taskContent}}", taskText)
+    .replace("{{taskContent}}", renderData.taskText)
     .replace("{{class}}", cls)
-    .replace("{{taskPath}}", taskLine)
+    .replace("{{taskPath}}", renderData.taskLine)
     .replace("{{due}}", "done")
-    .replaceAll("{{style}}", style)
-    .replace("{{title}}", noteFilename + ": " + taskText)
+    .replaceAll("{{style}}", renderData.style)
+    .replace("{{title}}", noteFilename + ": " + renderData.taskText)
     .replace("{{note}}", noteFilename)
     .replace("{{icon}}", taskIcon)
-    .replace("{{relative}}", relative);
+    .replace("{{relative}}", renderData.relative);
   return newTask;
 }
 
-function setTaskContentContainer(currentDate) {
+function setTaskContentContainer(currentDate, includedTypes, excludedTaskKeys) {
   var cellContent = "";
+  var includedTypeSet = includedTypes ? new Set(includedTypes) : null;
+
+  function shouldRenderType(type) {
+    return (!includedTypeSet || includedTypeSet.has(type)) &&
+      (!hiddenTaskTypes[type] || !optionSet.has(hiddenTaskTypes[type]));
+  }
 
   function compareFn(a, b) {
-    if (a.priority.toUpperCase() < b.priority.toUpperCase()) {
+    if (a._sortPriority < b._sortPriority) {
       return -1;
     }
-    if (a.priority.toUpperCase() > b.priority.toUpperCase()) {
+    if (a._sortPriority > b._sortPriority) {
       return 1;
     }
-    if (a.priority == b.priority) {
-      if (a.text.toUpperCase() < b.text.toUpperCase()) {
+    if (a._sortPriority == b._sortPriority) {
+      if (a._sortText < b._sortText) {
         return -1;
       }
-      if (a.text.toUpperCase() > b.text.toUpperCase()) {
+      if (a._sortText > b._sortText) {
         return 1;
       }
       return 0;
@@ -607,13 +605,13 @@ function setTaskContentContainer(currentDate) {
     var taskMap = new Map();
     
     // Priority order for the primary class (affects styling)
-    var typePriority = ["overdue", "due", "recurrence", "start", "scheduled", "process", "dailyNote", "done", "cancelled"];
-    
     function addTasksToMap(tasksToShow, type) {
+      if (!shouldRenderType(type)) return;
       for (var t = 0; t < tasksToShow.length; t++) {
         var task = tasksToShow[t];
         // Use path + line position as unique key
         var taskKey = task.path + ":" + task.line;
+        if (excludedTaskKeys && excludedTaskKeys.has(taskKey)) continue;
         
         if (taskMap.has(taskKey)) {
           // Task already exists, add this type to its list
@@ -650,8 +648,8 @@ function setTaskContentContainer(currentDate) {
     
     // Sort by primary type priority, then by task priority/text
     uniqueTasks.sort((a, b) => {
-      var aPriority = typePriority.indexOf(a.primaryType);
-      var bPriority = typePriority.indexOf(b.primaryType);
+      var aPriority = typeRank[a.primaryType];
+      var bPriority = typeRank[b.primaryType];
       if (aPriority !== bPriority) {
         return aPriority - bPriority;
       }
@@ -667,8 +665,11 @@ function setTaskContentContainer(currentDate) {
     // SEPARATE MODE: Tasks can appear multiple times (original behavior)
     
     function showTasks(tasksToShow, type) {
+      if (!shouldRenderType(type)) return;
       var sorted = [...tasksToShow].sort(compareFn);
       for (var t = 0; t < sorted.length; t++) {
+        var taskKey = sorted[t].path + ":" + sorted[t].line;
+        if (excludedTaskKeys && excludedTaskKeys.has(taskKey)) continue;
         cellContent += setTask(sorted[t], type);
       }
     }
@@ -974,17 +975,19 @@ function removeExistingView() {
 
 function getMonth(tasks, month) {
   removeExistingView();
+  var monthBase = moment(month);
+  var monthNumber = monthBase.format("MM");
+  var monthYear = monthBase.format("YYYY");
   var currentTitle =
     "<span>" +
-    moment(month).format("MMMM") +
+    monthBase.format("MMMM") +
     "</span><span> " +
-    moment(month).format("YYYY") +
+    monthYear +
     "</span>";
   rootNode.querySelector("button.current").innerHTML = currentTitle;
   var gridContent = "";
-  var firstDayOfMonth = moment(month).format("d");
-  var firstDateOfMonth = moment(month).startOf("month").format("D");
-  var lastDateOfMonth = moment(month).endOf("month").format("D");
+  var firstDayOfMonth = monthBase.format("d");
+  var lastDateOfMonth = monthBase.clone().endOf("month").date();
   var dueCounter = 0;
   var doneCounter = 0;
   var overdueCounter = 0;
@@ -1005,12 +1008,13 @@ function getMonth(tasks, month) {
     h < 7 - firstDayOfMonth + parseInt(firstDayOfWeek);
     h++
   ) {
-    var weekDayNr = moment(month).add(h, "days").format("d");
-    var weekDayName = moment(month).add(h, "days").format("ddd");
+    var headerDate = monthBase.clone().add(h, "days");
+    var weekDayNr = headerDate.format("d");
+    var weekDayName = headerDate.format("ddd");
     if (
       tDay == weekDayNr &&
-      tMonth == moment(month).format("M") &&
-      tYear == moment(month).format("YYYY")
+      tMonth == monthBase.format("M") &&
+      tYear == monthYear
     ) {
       gridHeads +=
         "<div class='gridHead today' data-weekday='" +
@@ -1032,39 +1036,38 @@ function getMonth(tasks, month) {
   var wrappers = "";
   var starts = 0 - firstDayOfMonth + parseInt(firstDayOfWeek);
   prepareProcessIndex(
-    moment(month).add(starts, "days").format("YYYY-MM-DD"),
-    moment(month).add(starts + 41, "days").format("YYYY-MM-DD"),
+    monthBase.clone().add(starts, "days").format("YYYY-MM-DD"),
+    monthBase.clone().add(starts + 41, "days").format("YYYY-MM-DD"),
   );
   for (w = 1; w < 7; w++) {
     var wrapper = "";
     var weekNr = "";
     var yearNr = "";
-    var monthName = moment(month)
-      .format("MMM")
+    var monthName = monthBase.format("MMM")
       .replace(".", "")
       .substring(0, 3);
     for (i = starts; i < starts + 7; i++) {
+      var cellDate = monthBase.clone().add(i, "days");
       if (i == starts) {
-        weekNr = moment(month).add(i, "days").format("w");
-        yearNr = moment(month).add(i, "days").format("YYYY");
+        weekNr = cellDate.format("w");
+        yearNr = cellDate.format("YYYY");
       }
-      var currentDate = moment(month).add(i, "days").format("YYYY-MM-DD");
+      var currentDate = cellDate.format("YYYY-MM-DD");
       if (!dailyNoteFolder) {
         var dailyNotePath = currentDate;
       } else {
         var dailyNotePath = dailyNoteFolder + "/" + currentDate;
       }
-      var weekDay = moment(month).add(i, "days").format("d");
-      var shortDayName = moment(month).add(i, "days").format("D");
-      var longDayName = moment(month).add(i, "days").format("D. MMM");
-      var shortWeekday = moment(month).add(i, "days").format("ddd");
+      var weekDay = cellDate.format("d");
+      var shortDayName = cellDate.format("D");
+      var longDayName = cellDate.format("D. MMM");
 
       // Filter Tasks
       getTasks(currentDate);
 
       // Count Events Only From Selected Month
       if (
-        moment(month).format("MM") == moment(month).add(i, "days").format("MM")
+        monthNumber == cellDate.format("MM")
       ) {
         dueCounter += due.length;
         dueCounter += recurrence.length;
@@ -1077,8 +1080,7 @@ function getMonth(tasks, month) {
         dailyNoteCounter += dailyNote.length;
         // Get Overdue Count From Today
         if (
-          moment().format("YYYY-MM-DD") ==
-          moment(month).add(i, "days").format("YYYY-MM-DD")
+          tToday == currentDate
         ) {
           overdueCounter = overdue.length;
         }
@@ -1088,7 +1090,7 @@ function getMonth(tasks, month) {
       var cellContent = setTaskContentContainer(currentDate);
 
       // Set Cell Name And Weekday
-      if (moment(month).add(i, "days").format("D") == 1) {
+      if (cellDate.date() == 1) {
         var cell = cellTemplate
           .replace("{{date}}", currentDate)
           .replace("{{cellName}}", longDayName)
@@ -1157,16 +1159,17 @@ function getMonth(tasks, month) {
 
 function getWeek(tasks, week) {
   removeExistingView();
+  var weekBase = moment(week);
   var currentTitle =
     "<span>" +
-    moment(week).format("YYYY") +
+    weekBase.format("YYYY") +
     "</span><span> " +
-    moment(week).format("[W]w") +
+    weekBase.format("[W]w") +
     "</span>";
   rootNode.querySelector("button.current").innerHTML = currentTitle;
   var gridContent = "";
-  var currentWeekday = moment(week).format("d");
-  var weekNr = moment(week).format("[W]w");
+  var currentWeekday = weekBase.format("d");
+  var weekNr = weekBase.format("[W]w");
   var dueCounter = 0;
   var doneCounter = 0;
   var overdueCounter = 0;
@@ -1177,8 +1180,8 @@ function getWeek(tasks, week) {
 
   var weekStartOffset = 0 - currentWeekday + parseInt(firstDayOfWeek);
   prepareProcessIndex(
-    moment(week).add(weekStartOffset, "days").format("YYYY-MM-DD"),
-    moment(week).add(weekStartOffset + 6, "days").format("YYYY-MM-DD"),
+    weekBase.clone().add(weekStartOffset, "days").format("YYYY-MM-DD"),
+    weekBase.clone().add(weekStartOffset + 6, "days").format("YYYY-MM-DD"),
   );
 
   for (
@@ -1186,15 +1189,16 @@ function getWeek(tasks, week) {
     i < weekStartOffset + 7;
     i++
   ) {
-    var currentDate = moment(week).add(i, "days").format("YYYY-MM-DD");
+    var cellDate = weekBase.clone().add(i, "days");
+    var currentDate = cellDate.format("YYYY-MM-DD");
     if (!dailyNoteFolder) {
       var dailyNotePath = currentDate;
     } else {
       var dailyNotePath = dailyNoteFolder + "/" + currentDate;
     }
-    var weekDay = moment(week).add(i, "days").format("d");
-    var dayName = moment(currentDate).format("ddd D.");
-    var longDayName = moment(currentDate).format("ddd, D. MMM");
+    var weekDay = cellDate.format("d");
+    var dayName = cellDate.format("ddd D.");
+    var longDayName = cellDate.format("ddd, D. MMM");
 
     // Filter Tasks
     getTasks(currentDate);
@@ -1210,8 +1214,7 @@ function getWeek(tasks, week) {
     recurrenceCounter += recurrence.length;
     dailyNoteCounter += dailyNote.length;
     if (
-      moment().format("YYYY-MM-DD") ==
-      moment(week).add(i, "days").format("YYYY-MM-DD")
+      tToday == currentDate
     ) {
       overdueCounter = overdue.length;
     }
@@ -1228,7 +1231,7 @@ function getWeek(tasks, week) {
       .replace("{{dailyNote}}", dailyNotePath);
 
     // Set Cell Name And Weekday
-    if (moment(week).add(i, "days").format("D") == 1) {
+    if (cellDate.date() == 1) {
       var cell = cellTemplate
         .replace("{{date}}", currentDate)
         .replace("{{cellName}}", longDayName)
@@ -1273,11 +1276,14 @@ function getWeek(tasks, week) {
 
 function getList(tasks, month) {
   removeExistingView();
+  var monthBase = moment(month).startOf("month");
+  var selectedMonthKey = monthBase.format("YYYY-MM");
+  var currentMonthKey = tToday.slice(0, 7);
   var currentTitle =
     "<span>" +
-    moment(month).format("MMMM") +
+    monthBase.format("MMMM") +
     "</span><span> " +
-    moment(month).format("YYYY") +
+    monthBase.format("YYYY") +
     "</span>";
   rootNode.querySelector("button.current").innerHTML = currentTitle;
   var listContent = "";
@@ -1292,22 +1298,21 @@ function getList(tasks, month) {
   if (!upcomingDays) {
     upcomingDays = "7";
   }
-  var listRangeStart = moment(month).startOf("month").format("YYYY-MM-DD");
-  var listRangeEnd = moment(month).endOf("month").format("YYYY-MM-DD");
-  if (moment(month).format("YYYY-MM") === moment().format("YYYY-MM")) {
-    var upcomingRangeEnd = moment().add(parseInt(upcomingDays), "days").format("YYYY-MM-DD");
+  var listRangeStart = monthBase.format("YYYY-MM-DD");
+  var listRangeEnd = monthBase.clone().endOf("month").format("YYYY-MM-DD");
+  if (selectedMonthKey === currentMonthKey) {
+    var upcomingRangeEnd = addIsoDays(tToday, parseInt(upcomingDays));
     if (upcomingRangeEnd > listRangeEnd) listRangeEnd = upcomingRangeEnd;
   }
   prepareProcessIndex(listRangeStart, listRangeEnd);
+  var upcomingDates = new Set();
+  var normalTypes = ["due", "recurrence", "start", "scheduled", "process", "dailyNote", "done", "cancelled"];
 
   // Loop Days From Current Month
-  for (i = 0; i < moment(month).endOf("month").format("D"); i++) {
-    var currentDate = moment(month)
-      .startOf("month")
-      .add(i, "days")
-      .format("YYYY-MM-DD");
-    var monthName = moment(month)
-      .format("MMM")
+  for (i = 0; i < monthBase.clone().endOf("month").date(); i++) {
+    var listDate = monthBase.clone().add(i, "days");
+    var currentDate = listDate.format("YYYY-MM-DD");
+    var monthName = monthBase.format("MMM")
       .replace(".", "")
       .substring(0, 3);
 
@@ -1324,23 +1329,27 @@ function getList(tasks, month) {
     scheduledCounter += scheduled.length;
     recurrenceCounter += recurrence.length;
     dailyNoteCounter += dailyNote.length;
-    if (moment().format("YYYY-MM-DD") == currentDate) {
+    if (tToday == currentDate) {
       overdueCounter = overdue.length;
+      var overdueTaskKeys = new Set(
+        overdue.map((task) => task.path + ":" + task.line),
+      );
       var overdueDetails =
         "<details open class='overdue'><summary>Overdue</summary>" +
-        setTaskContentContainer(currentDate) +
+        setTaskContentContainer(currentDate, ["overdue"]) +
         "</details>";
       var todayDetails =
         "<details open class='today'><summary>Today</summary>" +
-        setTaskContentContainer(currentDate) +
+        setTaskContentContainer(currentDate, normalTypes, overdueTaskKeys) +
         "</details>";
 
       // Upcoming
       var upcomingContent = "";
       for (t = 1; t < parseInt(upcomingDays) + 1; t++) {
-        var next = moment(currentDate).add(t, "days").format("YYYY-MM-DD");
+        var next = addIsoDays(currentDate, t);
+        upcomingDates.add(next);
         getTasks(next);
-        upcomingContent += setTaskContentContainer(next);
+        upcomingContent += setTaskContentContainer(next, normalTypes);
       }
       var upcomingDetails =
         "<details open class='upcoming'><summary>Upcoming</summary>" +
@@ -1349,20 +1358,20 @@ function getList(tasks, month) {
 
       listContent +=
         "<details open class='today'><summary><span>" +
-        moment(currentDate).format("dddd, D") +
+        listDate.format("dddd, D") +
         "</span><span class='weekNr'> " +
-        moment(currentDate).format("[W]w") +
+        listDate.format("[W]w") +
         "</span></summary><div class='content'>" +
         overdueDetails +
         todayDetails +
         upcomingDetails +
         "</div></details>";
-    } else {
+    } else if (!upcomingDates.has(currentDate)) {
       listContent +=
         "<details open><summary><span>" +
-        moment(currentDate).format("dddd, D") +
+        listDate.format("dddd, D") +
         "</span><span class='weekNr'> " +
-        moment(currentDate).format("[W]w") +
+        listDate.format("[W]w") +
         "</span></summary><div class='content'>" +
         setTaskContentContainer(currentDate) +
         "</div></details>";
@@ -1388,7 +1397,7 @@ function getList(tasks, month) {
   rootNode.setAttribute("view", "list");
 
   // Scroll To Today If Selected Month Is Current Month
-  if (moment().format("YYYY-MM") == moment(month).format("YYYY-MM")) {
+  if (currentMonthKey == selectedMonthKey) {
     var listElement = rootNode.querySelector(".list");
     var todayElement = rootNode.querySelector(".today");
     var scrollPos = todayElement.offsetTop - todayElement.offsetHeight + 85;
