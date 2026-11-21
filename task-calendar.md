@@ -1,12 +1,16 @@
----
-aliases:
-  - 任務日曆
-created: 2024-05-02T17:26:05-04:00
-modified: 2024-07-03T23:00:43-04:00
----
-
-# 任務日曆
+# Obsidian-Tasks-Calendar
 
 ```dataviewjs
-await dv.view("tasksCalendar", {pages: '"misc"', view: "month", firstDayOfWeek: "1", options: "style1 noDailyNote filter", dailyNoteFolder: "misc/dated/daily", mergeTasks: true})
+const page = dv.current();
+const config = {
+  // A leading slash resolves paths from the vault root.
+  taskFolder: "/misc",
+  dailyNoteFolder: "/misc/dated/daily",
+  view: "month",
+  firstDayOfWeek: "1",
+  options: "style1 noDailyNote filter",
+  mergeTasks: true,
+};
+
+await dv.view(page.file.folder, config);
 ```

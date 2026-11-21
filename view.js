@@ -1,5 +1,7 @@
 let {
   pages,
+  taskFolder,
+  baseFolder,
   view,
   firstDayOfWeek,
   globalTaskFilter,
@@ -12,15 +14,26 @@ let {
   mergeTasks,  // If true, tasks appearing in multiple categories show once with combined icons
 } = input;
 
+// Folder options are relative to the note containing the Dataview block. This
+// keeps the view portable when its folder (or the whole vault) is moved. A
+// leading slash may still be used for an explicit vault-root-relative path.
+baseFolder = normalizeVaultPath(baseFolder || dv.current()?.file?.folder || "", "");
+if (taskFolder !== undefined) {
+  taskFolder = resolveVaultPath(taskFolder, baseFolder);
+}
+if (dailyNoteFolder) {
+  dailyNoteFolder = resolveVaultPath(dailyNoteFolder, baseFolder);
+}
+
 // Default mergeTasks to false (original behavior) if not specified
 if (mergeTasks === undefined) {
   mergeTasks = false;
 }
 
 // Error Handling
-if (!pages && pages != "") {
+if (pages === undefined && taskFolder === undefined) {
   dv.span(
-    '> [!ERROR] Missing pages parameter\n> \n> Please set the pages parameter like\n> \n> `pages: ""`',
+    '> [!ERROR] Missing task source\n> \n> Set `taskFolder` (recommended) or the advanced `pages` option.',
   );
   return false;
 }
@@ -67,8 +80,11 @@ if (dailyNoteFormat) {
   }
 }
 
-// Get, Set, Eval Pages
-if (pages == "") {
+// Get tasks. taskFolder is the portable, relative-path option; pages remains
+// available for advanced Dataview source expressions and pre-built task lists.
+if (taskFolder !== undefined) {
+  var tasks = dv.pages(taskFolder ? `"${taskFolder}"` : "").file.tasks;
+} else if (pages == "") {
   var tasks = dv.pages().file.tasks;
 } else if (typeof pages === "string" && pages.startsWith("dv.pages")) {
   var tasks = eval(pages);
@@ -390,6 +406,24 @@ function prepareProcessIndex(rangeStart, rangeEnd) {
 function getFilename(path) {
   var filename = path.match(/^(?:.*\/)?([^\/]+?|)(?=(?:\.[^\/.]*)?$)/)[1];
   return filename;
+}
+
+function normalizeVaultPath(path, fallback) {
+  if (path === undefined || path === null || path === "") return fallback;
+  var parts = String(path).replace(/\\/g, "/").split("/");
+  var normalized = [];
+  for (var part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") normalized.pop();
+    else normalized.push(part);
+  }
+  return normalized.join("/");
+}
+
+function resolveVaultPath(path, fromFolder) {
+  var value = String(path || "").replace(/\\/g, "/");
+  if (value.startsWith("/")) return normalizeVaultPath(value, "");
+  return normalizeVaultPath((fromFolder ? fromFolder + "/" : "") + value, "");
 }
 
 function capitalize(str) {
